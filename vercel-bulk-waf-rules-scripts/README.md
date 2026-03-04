@@ -87,6 +87,7 @@ RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply vendor-ips.csv
 | `exports/cloudflare-export.sh` | Export IPs from Cloudflare WAF rules |
 | `exports/akamai-export.sh` | Export IPs from Akamai Network Lists |
 | `exports/fastly-export.sh` | Export IPs from Fastly Next-Gen WAF |
+| `exports/aws-waf-export.sh` | Export IPs from AWS WAF v2 (WAFV2) IP Sets |
 
 ## Commands
 
@@ -121,6 +122,7 @@ Detailed guides are available in the `docs/` folder:
 | [Cloudflare Export](docs/cloudflare-export.md) | Export IPs from Cloudflare WAF rules |
 | [Akamai Export](docs/akamai-export.md) | Export IPs from Akamai Network Lists |
 | [Fastly Export](docs/fastly-export.md) | Export IPs from Fastly Next-Gen WAF |
+| [AWS WAF Export](docs/aws-waf-export.md) | Export IPs from AWS WAF v2 IP Sets |
 | [CI/CD Integration](docs/ci-cd-integration.md) | GitHub Actions, GitLab CI, CircleCI examples |
 
 ## How It Works
@@ -216,6 +218,28 @@ RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply fastly_ips.csv
 ```
 
 See [docs/fastly-export.md](docs/fastly-export.md) for details.
+
+### From AWS WAF
+
+```bash
+# Configure AWS credentials
+export AWS_PROFILE=my-profile
+export AWS_DEFAULT_REGION=us-west-2
+
+# Discover and export IP Sets
+./exports/aws-waf-export.sh --list-ip-sets
+./exports/aws-waf-export.sh --ip-set vendor-allowlist a1b2c3d4-5678-90ab-cdef-EXAMPLE11111
+
+# Or export all IP Sets at once
+./exports/aws-waf-export.sh --all-ip-sets
+
+# Import to Vercel (choose your mode)
+RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply aws_waf_ips.csv
+```
+
+> **Note:** This script supports AWS WAF v2 (WAFV2) only. AWS WAF Classic (v1) was sunset on September 30, 2025. See the [migration guide](https://docs.aws.amazon.com/waf/latest/developerguide/waf-migrating-from-classic.html) if you need to migrate Classic resources first.
+
+See [docs/aws-waf-export.md](docs/aws-waf-export.md) for details.
 
 ## Rollback Operations
 
