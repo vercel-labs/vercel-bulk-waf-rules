@@ -86,6 +86,7 @@ RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply vendor-ips.csv
 | `rollback.sh` | Backup, restore, enable/disable WAF rules |
 | `exports/cloudflare-export.sh` | Export IPs from Cloudflare WAF rules |
 | `exports/akamai-export.sh` | Export IPs from Akamai Network Lists |
+| `exports/fastly-export.sh` | Export IPs from Fastly Next-Gen WAF |
 
 ## Commands
 
@@ -119,6 +120,7 @@ Detailed guides are available in the `docs/` folder:
 | [Vercel Credentials](docs/vercel-credentials.md) | API token setup and project/team ID discovery |
 | [Cloudflare Export](docs/cloudflare-export.md) | Export IPs from Cloudflare WAF rules |
 | [Akamai Export](docs/akamai-export.md) | Export IPs from Akamai Network Lists |
+| [Fastly Export](docs/fastly-export.md) | Export IPs from Fastly Next-Gen WAF |
 | [CI/CD Integration](docs/ci-cd-integration.md) | GitHub Actions, GitLab CI, CircleCI examples |
 
 ## How It Works
@@ -196,6 +198,24 @@ RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply akamai_ips.csv
 ```
 
 See [docs/akamai-export.md](docs/akamai-export.md) for details.
+
+### From Fastly
+
+```bash
+# Export from Fastly Next-Gen WAF (Signal Sciences API)
+export SIGSCI_EMAIL="your-email@example.com"
+export SIGSCI_TOKEN="your-api-token"
+./exports/fastly-export.sh --whitelist mycorp mysite
+
+# Or use Fastly NGWAF API
+export FASTLY_API_TOKEN="your-fastly-token"
+./exports/fastly-export.sh --account-list list_abc123
+
+# Import to Vercel (choose your mode)
+RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply fastly_ips.csv
+```
+
+See [docs/fastly-export.md](docs/fastly-export.md) for details.
 
 ## Rollback Operations
 
