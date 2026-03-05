@@ -1,73 +1,35 @@
-# Dependencies
-node_modules/
+# Backup files containing sensitive IP data
+backups/
+*.backup.json
 
-# Build outputs
-.next/
-out/
-dist/
-build/
-
-# Environment files
+# Environment files with tokens
 .env
 .env.*
 *.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Vercel
-.vercel/
-
-# Backup files
-backups/
-*.backup.json
 
 # Log files
 *.log
 audit.log
 
-# Credentials and tokens
+# Vercel token files
 .vercel-token
 vercel-token.txt
-*.pem
-*.key
 
 # OS generated files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
 Thumbs.db
-ehthumbs.db
 
-# Editor and IDE files
+# Editor files
 *.swp
 *.swo
 *~
 .idea/
 .vscode/
-*.sublime-project
-*.sublime-workspace
 
 # Temporary files
 *.tmp
 *.temp
 
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# TypeScript
-*.tsbuildinfo
-
-# Testing
-coverage/
-
-# Cursor/Claude
-.cursor/
-.claude/
-.agents/
+# E2E test state files (auto-generated, contain AWS resource IDs)
+.test-state.json
+tests/aws-waf/.test-state.json
