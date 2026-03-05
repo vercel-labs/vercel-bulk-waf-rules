@@ -67,7 +67,21 @@ All resources are created in REGIONAL scope. State is saved to `.test-state.json
 
 ## Cost
 
-**$0.** IP Sets are free. Web ACLs are only billed when associated with a resource (ALB, CloudFront, etc.) — the test Web ACL is not associated with anything.
+**$0 per run.** Here's the breakdown:
+
+| Resource | AWS Pricing | Test Usage | Cost |
+|----------|-------------|------------|------|
+| IP Sets (4) | Free — no charge for IP Sets themselves | Created/deleted per run | **$0** |
+| Web ACL (1) | $5/month *when associated with a resource* | Not associated with any ALB/CloudFront/API GW | **$0** |
+| API calls | Free — `wafv2:*` control plane calls are not billed | ~30 calls per full setup/test/teardown cycle | **$0** |
+| Data transfer | N/A — no data plane traffic | No request inspection occurs | **$0** |
+
+**Why it's free:** AWS WAF billing is triggered by Web ACL association with actual resources (ALB, CloudFront distribution, API Gateway, etc.) and per-request inspection. The test Web ACL is never attached to anything — it exists solely as a metadata object for the export script to read.
+
+**Risk of accidental cost:** If you forget to run `teardown.sh` and later attach the test Web ACL to a real resource, it would cost $5/month. Mitigations:
+- `teardown.sh` is run with `if: always()` in CI (runs even on test failure)
+- `teardown.sh --force` finds orphaned `e2e-test-*` resources by name
+- All test resources use a clear `e2e-test-` prefix — impossible to confuse with production
 
 ## Cleanup
 
