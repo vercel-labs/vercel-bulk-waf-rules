@@ -1,6 +1,8 @@
-# Vercel Bulk WAF Rules
+# Vercel Bulk WAF Rule Migration Scripts
 
-Bulk manage Vercel WAF (Web Application Firewall) rules via CSV with **two modes**:
+Bulk migrate WAF (Web Application Firewall) rules from various providers to Vercel.
+
+We currently support **two modes**:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
@@ -9,7 +11,7 @@ Bulk manage Vercel WAF (Web Application Firewall) rules via CSV with **two modes
 
 ## Repo Structure
 
-```
+```plaintext
 docs/                        # Detailed guides (credentials, exports, CI/CD)
   scripts/
   vercel-bulk-waf-rules.sh   # Main script
@@ -66,7 +68,7 @@ DRY_RUN=true RULE_MODE=deny ./scripts/vercel-bulk-waf-rules.sh apply vendor-ips.
 
 The script will prompt you to choose your intended behavior:
 
-```
+```bash
 Select rule mode:
 
   1) allowlist  - Block ALL traffic except listed IPs
