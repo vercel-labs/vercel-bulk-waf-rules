@@ -204,7 +204,7 @@ Export all blacklisted IPs from a site:
 > **Safety:** Do not pass this blacklist to the legacy importer with `RULE_MODE=deny`. Legacy deny mode means "deny everyone except these addresses," which reverses blacklist intent. Generate a non-mutating TypeScript plan instead:
 >
 > ```bash
-> npm run cli -- plan-ip --input fastly_ips.csv --intent blocklist --source-provider fastly --project-id <project-id>
+> npm run --silent cli -- plan-ip --input fastly_ips.csv --intent blocklist --source-provider fastly --project-id <project-id>
 > ```
 
 ### List Corp-Level Lists

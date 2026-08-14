@@ -1,0 +1,4 @@
+ip,vendor_name,notes
+192.0.2.10,Acme,Webhook sender
+198.51.100.0/28,Example Partner,IPv4 API range
+2001:db8:1234::/48,Acme,IPv6 webhook range

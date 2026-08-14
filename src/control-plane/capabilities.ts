@@ -107,6 +107,35 @@ export const SOURCE_CAPABILITIES: readonly SourceCapability[] = [
     lastVerified: '2026-08-14',
   },
   {
+    provider: 'aws',
+    product: 'compute',
+    supportLevel: 'planned',
+    nativeDiscovery: false,
+    sourceSchemaValidation: false,
+    semanticCoverage: [],
+    knownUnsupported: [
+      'Lambda and API Gateway native inventory',
+      'runtime and dependency compatibility assessment',
+      'application rewrite blueprint generation',
+      'cross-runtime HTTP contract verification',
+    ],
+    liveE2e: 'none',
+    apiVariants: [
+      {
+        id: 'lambda-api',
+        status: 'current',
+        documentation: 'https://docs.aws.amazon.com/lambda/latest/api/Welcome.html',
+      },
+      {
+        id: 'api-gateway-v2',
+        status: 'current',
+        documentation:
+          'https://docs.aws.amazon.com/apigatewayv2/latest/api-reference/api-reference.html',
+      },
+    ],
+    lastVerified: '2026-08-14',
+  },
+  {
     provider: 'akamai',
     product: 'firewall',
     supportLevel: 'manual-input',
@@ -193,7 +222,7 @@ export const TARGET_CAPABILITIES: readonly TargetCapability[] = [
     supportLevel: 'planned',
     coverage: [],
     knownUnsupported: ['CDN canonical model and compiler are not implemented'],
-    documentation: ['https://vercel.com/docs/edge-network/caching'],
+    documentation: ['https://vercel.com/docs/cdn', 'https://vercel.com/docs/caching/cdn-cache'],
     lastVerified: '2026-08-14',
   },
   {
@@ -203,6 +232,21 @@ export const TARGET_CAPABILITIES: readonly TargetCapability[] = [
     coverage: [],
     knownUnsupported: ['Domain/DNS canonical model and compiler are not implemented'],
     documentation: ['https://vercel.com/docs/domains'],
+    lastVerified: '2026-08-14',
+  },
+  {
+    provider: 'vercel',
+    product: 'compute',
+    supportLevel: 'planned',
+    coverage: [],
+    knownUnsupported: [
+      'workload canonical model and Vercel Functions compiler are not implemented',
+      '.NET is not an official Vercel Functions runtime and requires a port or redesign',
+    ],
+    documentation: [
+      'https://vercel.com/docs/functions',
+      'https://vercel.com/docs/functions/runtimes',
+    ],
     lastVerified: '2026-08-14',
   },
 ];
@@ -227,9 +271,14 @@ export function formatCapabilityRegistry(registry: CapabilityRegistry = CAPABILI
   ];
 
   for (const source of registry.sources) {
+    const semantics = source.supportLevel === 'planned'
+      ? 'none'
+      : source.sourceSchemaValidation
+        ? 'validated'
+        : 'operator-declared';
     lines.push(
       `  ${source.provider}/${source.product}: ${source.supportLevel} ` +
-        `(scan=${source.nativeDiscovery ? 'yes' : 'no'}, semantics=${source.sourceSchemaValidation ? 'validated' : 'operator-declared'}, ` +
+        `(scan=${source.nativeDiscovery ? 'yes' : 'no'}, semantics=${semantics}, ` +
         `live-e2e=${source.liveE2e}, verified=${source.lastVerified})`,
     );
   }

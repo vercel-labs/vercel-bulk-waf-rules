@@ -1,8 +1,10 @@
 # Vercel Migration Control Plane
 
-This repository is evolving from a bulk IP/WAF script into a TypeScript migration control plane for moving Firewall, CDN, and Domain configuration from third-party providers to Vercel.
+This repository is evolving from a bulk IP/WAF script into a TypeScript migration control plane for moving Firewall, CDN, Domain, and application workload configuration from third-party providers to Vercel.
 
 This file is both the project charter and the durable progress ledger. Update it whenever an architectural decision changes, a milestone is completed, or a newly discovered blocker changes the roadmap.
+
+All migration direction references mean `{source platform} -> Vercel`. Reverse migrations from Vercel to another target require separate target compilers and are not part of the current goal.
 
 ## Product goal
 
@@ -18,9 +20,21 @@ Build a safe, inspectable migration workflow that can:
 
 Initial source providers are Cloudflare, AWS, Akamai, and Fastly. Vercel is the initial and primary target.
 
+## MVP scope
+
+The MVP proves three vertical slices:
+
+1. A complete, staged Firewall path for IP policies and Cloudflare custom rulesets.
+2. An AWS Lambda and API Gateway assessment path that produces dependency-aware migration blueprints. Unsupported source runtimes such as .NET are explicit rewrite cases, not automatic lift-and-shift migrations.
+3. A Domain/DNS planning path with dependency ordering, readiness checks, and human-approved cutover gates.
+
+CDN policy translation follows the MVP. The first release may inventory CDN behavior and report gaps, but it must not advertise CDN migration until a compiler and verification path meet the definition of done.
+
+The durable roadmap, case matrix, and release gates are in [`docs/mvp-test-plan.md`](docs/mvp-test-plan.md).
+
 ## Architecture invariants
 
-- The control plane is generic; Firewall, CDN, and Domains keep separate typed domain models.
+- The control plane is generic; Firewall, CDN, Domains, and Compute keep separate typed domain models.
 - Provider connectors own authentication, API compatibility, pagination, retries, and immutable raw snapshots. They do not decide target behavior.
 - Domain translators preserve source semantics and provenance. They never silently discard an action, condition, scope, priority, default, or reference.
 - Target compilers own Vercel capability checks, target limits, and target resource construction.
@@ -42,6 +56,7 @@ src/
     firewall/          canonical firewall policy model
     cdn/               canonical CDN configuration model
     domains/           canonical domain and DNS model
+    compute/           canonical workload, trigger, and dependency model
   providers/           Cloudflare, AWS, Akamai, Fastly connectors
   targets/
     vercel/            Vercel product compilers and executors
@@ -80,14 +95,17 @@ Do not create a single universal configuration object with optional fields for e
 - [ ] Add staged log/preview/production rollout and traffic verification.
 - [ ] Replace the unverified rollback path with a supported, tested recovery workflow.
 
-### Phase 3 — Add Domains and CDN
+### Phase 3 — Add Compute, Domains, and CDN
 
+- [ ] Add AWS Lambda and API Gateway discovery with a typed workload and dependency model.
+- [ ] Add compatibility assessment and migration blueprints for Vercel Functions, including explicit rewrite-required outcomes.
 - [ ] Add Domain/DNS discovery, dependency planning, cutover, propagation, and verification.
 - [ ] Add CDN origins, cache policies, redirects/rewrites, headers, and edge-behavior mapping.
 - [ ] Represent provider-specific edge code and other non-portable behavior as manual or unsupported.
 
 ### Phase 4 — Operationalize compatibility
 
+- [x] Define the MVP vertical slices, test matrix, and release gates.
 - [ ] Add sanitized golden fixtures and contract tests for every advertised provider/product level.
 - [ ] Add read-only live smoke tests and minimum/current Vercel CLI compatibility tests.
 - [ ] Track `lastVerified`, API variants, and support levels in a capability registry.
@@ -108,6 +126,7 @@ Last updated: 2026-08-14
 - `plan-ip --artifact-dir` writes private bundle files under a schema-versioned `v1` directory; `validate` and `report` read the same durable format.
 - `support` exposes a versioned capability registry. Cloudflare is `offline-semantic`; AWS, Akamai, and Fastly remain `manual-input`.
 - `plan-cloudflare` validates Custom Rulesets API responses and preserves every rule as compiled or explicit manual/unsupported work. It has no authenticated source discovery yet.
+- The MVP roadmap and test plan now cover IP policies, Cloudflare and AWS WAF, AWS .NET Lambda assessment and port validation, Domain/DNS planning, CDN inventory, shared safety cases, and pilot release gates.
 
 ## Near-term working sequence
 
@@ -115,7 +134,9 @@ Last updated: 2026-08-14
 2. Add provider-native read-only scan workflows and capability/version reporting.
 3. Add Vercel capacity, rule-order, shadowing, and conflict analysis.
 4. Add execution journals and verified staged-apply/resume behavior.
-5. Introduce Domain/DNS primitives after the Firewall vertical proves the shared contracts.
+5. Add the AWS Compute assessment path, beginning with the .NET Lambda reference fixture.
+6. Introduce Domain/DNS primitives after the Firewall vertical proves the shared contracts.
+7. Add CDN translation after the cross-product dependency model has been exercised.
 
 ## Definition of done for an advertised migration path
 

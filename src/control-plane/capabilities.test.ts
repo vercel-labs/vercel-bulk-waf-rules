@@ -8,7 +8,11 @@ import {
 
 describe('capability registry', () => {
   it('has one truthful Firewall entry for every advertised source provider', () => {
-    expect(SOURCE_CAPABILITIES.map(({ provider }) => provider).sort()).toEqual([
+    expect(
+      SOURCE_CAPABILITIES.filter(({ product }) => product === 'firewall')
+        .map(({ provider }) => provider)
+        .sort(),
+    ).toEqual([
       'akamai',
       'aws',
       'cloudflare',
@@ -17,14 +21,25 @@ describe('capability registry', () => {
     expect(new Set(SOURCE_CAPABILITIES.map(({ provider, product }) => `${provider}/${product}`)).size).toBe(
       SOURCE_CAPABILITIES.length,
     );
-    expect(SOURCE_CAPABILITIES.find(({ provider }) => provider === 'cloudflare')?.supportLevel).toBe(
-      'offline-semantic',
-    );
     expect(
-      SOURCE_CAPABILITIES.filter(({ provider }) => provider !== 'cloudflare').every(
-        ({ supportLevel }) => supportLevel === 'manual-input',
-      ),
+      SOURCE_CAPABILITIES.find(
+        ({ provider, product }) => provider === 'cloudflare' && product === 'firewall',
+      )?.supportLevel,
+    ).toBe('offline-semantic');
+    expect(
+      SOURCE_CAPABILITIES.filter(
+        ({ provider, product }) => provider !== 'cloudflare' && product === 'firewall',
+      ).every(({ supportLevel }) => supportLevel === 'manual-input'),
     ).toBe(true);
+  });
+
+  it('advertises AWS compute assessment as planned rather than implemented', () => {
+    const source = SOURCE_CAPABILITIES.find(
+      ({ provider, product }) => provider === 'aws' && product === 'compute',
+    );
+    expect(source?.supportLevel).toBe('planned');
+    expect(source?.nativeDiscovery).toBe(false);
+    expect(source?.semanticCoverage).toEqual([]);
   });
 
   it('records current official documentation and a verification date', () => {
@@ -41,7 +56,9 @@ describe('capability registry', () => {
     const report = formatCapabilityRegistry(CAPABILITY_REGISTRY);
     expect(report).toContain('cloudflare/firewall: offline-semantic');
     expect(report).toContain('aws/firewall: manual-input');
+    expect(report).toContain('aws/compute: planned (scan=no, semantics=none');
     expect(report).toContain('semantics=operator-declared');
     expect(report).toContain('domains: planned (coverage=0');
+    expect(report).toContain('compute: planned (coverage=0');
   });
 });

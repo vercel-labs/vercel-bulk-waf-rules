@@ -83,7 +83,7 @@ const sourceSnapshotSchema = z
 const planOperationSchema = z
   .object({
     id: nonEmptyString,
-    product: z.enum(['firewall', 'cdn', 'domains']),
+    product: z.enum(['firewall', 'cdn', 'domains', 'compute']),
     kind: z.enum(['create', 'update', 'delete', 'reconcile', 'reorder', 'verify', 'manual']),
     effect: z.enum(['read-only', 'staged', 'immediate', 'external-manual']),
     approval: z.enum(['none', 'before-execute', 'before-publish']),

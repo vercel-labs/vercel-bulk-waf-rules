@@ -15,7 +15,9 @@ provider connector
   -> product-specific staging and verification (future)
 ```
 
-Provider connectors own authentication, pagination, retries, API variants, and raw evidence. Product translators own the meaning of Firewall, CDN, or Domain configuration. Vercel compilers own target limits and payloads. The shared control plane owns provenance, diagnostics, dependencies, approvals, risk, artifact validation, and execution journals.
+Provider connectors own authentication, pagination, retries, API variants, and raw evidence. Product translators own the meaning of Firewall, CDN, Domain, or Compute configuration. Vercel compilers own target limits and payloads. The shared control plane owns provenance, diagnostics, dependencies, approvals, risk, artifact validation, and execution journals.
+
+Product models remain separate. Shared resource identities and dependencies can connect a Compute route to a Domain attachment or Firewall policy without creating one universal provider configuration schema.
 
 ## Durable artifacts
 
@@ -62,4 +64,6 @@ The CLI provides:
 
 Cloudflare's current adapter parses a deliberate subset of the Rules language and fails closed outside it. It compiles supported Boolean expressions into Vercel's OR-of-AND condition groups while respecting target group, condition, and value limits. Cloudflare skip actions, unresolved lists, transformations, unsupported fields/actions, and expression expansion beyond target limits remain explicit manual work.
 
-See the root `AGENTS.md` for project invariants, milestone status, and the definition of done for advertised migration paths.
+The capability registry includes AWS Compute and Vercel Compute as `planned`. The current CLI does not discover, translate, or deploy AWS Lambda workloads.
+
+See the root `AGENTS.md` for project invariants and milestone status. See [`docs/mvp-test-plan.md`](mvp-test-plan.md) for the MVP roadmap, test matrix, and release gates.

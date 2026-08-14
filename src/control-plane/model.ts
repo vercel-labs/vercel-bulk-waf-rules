@@ -3,7 +3,7 @@
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 export const MIGRATION_PLAN_SCHEMA_VERSION = 1;
 
-export type MigrationProduct = 'firewall' | 'cdn' | 'domains';
+export type MigrationProduct = 'firewall' | 'cdn' | 'domains' | 'compute';
 
 export type TranslationFidelity = 'exact' | 'approximate' | 'manual' | 'unsupported';
 
