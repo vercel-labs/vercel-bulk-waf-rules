@@ -1,6 +1,61 @@
-# Vercel Bulk WAF Rule Migration Scripts
+# Vercel Migration Control Plane
 
-Bulk migrate WAF (Web Application Firewall) rules from various providers to Vercel.
+This repository is being re-architected into a TypeScript control plane for planning and verifying Firewall, CDN, and Domain migrations to Vercel. See [AGENTS.md](AGENTS.md) for the product charter, architecture invariants, roadmap, and current progress.
+
+The existing Bash workflow is a legacy **IP-list migration utility**. It does not yet preserve complete source-provider firewall semantics such as actions, nested conditions, priority, default behavior, rate limits, or scope. Do not treat its provider exporters as full WAF-policy migration support.
+
+The early TypeScript preview can create a non-mutating source snapshot and deterministic plan bundle:
+
+```bash
+npm run cli -- plan-ip \
+  --input vendor-ips.csv \
+  --intent blocklist \
+  --project-id prj_xxxxxxxxxxxx \
+  > migration-bundle.json
+```
+
+Alternatively, write it with private permissions below a schema-versioned artifact directory:
+
+```bash
+npm run cli -- plan-ip \
+  --input vendor-ips.csv \
+  --intent blocklist \
+  --project-id prj_xxxxxxxxxxxx \
+  --artifact-dir .vercel-migrate/artifacts
+```
+
+Validate or render a review report before any future staging step:
+
+```bash
+npm run cli -- validate --input migration-bundle.json
+npm run cli -- report --input migration-bundle.json
+npm run cli -- support
+```
+
+Validation checks the artifact schema, snapshot provenance, dependency safety, and deterministic content ID. None of these TypeScript commands mutate Vercel.
+
+`support` is the authoritative machine-readable compatibility view. It reports API variants, last-verification dates, semantic gaps, live-E2E status, and the actual implementation level instead of inferring support from the presence of a legacy export script.
+
+### Cloudflare semantic preview
+
+`plan-cloudflare` accepts the JSON response from Cloudflare's zone-level `http_request_firewall_custom` Rulesets entrypoint:
+
+```bash
+npm run cli -- plan-cloudflare \
+  --input cloudflare-custom-ruleset.json \
+  --account-id account_xxxxxxxxxxxx \
+  --zone-id zone_xxxxxxxxxxxx \
+  --project-id prj_xxxxxxxxxxxx \
+  > migration-bundle.json
+```
+
+The current fail-closed subset supports Boolean expressions over client IP/ASN/country and common request fields, plus block/log actions and explicitly approximate challenge mappings. Unsupported fields, transformations, unresolved lists, skip semantics, managed execution, and other actions become visible manual operations. They are never silently dropped. Authenticated Cloudflare discovery is not implemented yet.
+
+Provider-derived CSVs must include `--source-provider`; these plans are intentionally classified as `manual` fidelity until native semantic adapters are implemented.
+
+## Legacy Bash workflow
+
+Bulk migrate IP allow/bypass lists to Vercel Firewall.
 
 We currently support **two modes**:
 

@@ -201,6 +201,12 @@ Export all blacklisted IPs from a site:
 ./exports/fastly-export.sh --blacklist mycorp production
 ```
 
+> **Safety:** Do not pass this blacklist to the legacy importer with `RULE_MODE=deny`. Legacy deny mode means "deny everyone except these addresses," which reverses blacklist intent. Generate a non-mutating TypeScript plan instead:
+>
+> ```bash
+> npm run cli -- plan-ip --input fastly_ips.csv --intent blocklist --source-provider fastly --project-id <project-id>
+> ```
+
 ### List Corp-Level Lists
 
 ```bash
@@ -370,6 +376,8 @@ RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply fastly_ips.csv
 **Choose your Vercel mode based on your use case:**
 - `RULE_MODE=deny` - Block all traffic EXCEPT from these IPs (private apps)
 - `RULE_MODE=bypass` - Skip WAF for these IPs (vendor integrations)
+
+Neither legacy mode represents a source blacklist. Use the TypeScript `plan-ip --intent blocklist` workflow for blacklist data.
 
 ## Debugging
 

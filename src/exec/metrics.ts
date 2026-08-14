@@ -29,7 +29,6 @@
 
 import { truncate } from './errors.js';
 import type { Scope } from './firewall.js';
-import type { CliResult } from './spawn.js';
 import { parseJsonStdout, runVercel } from './spawn.js';
 
 export const FIREWALL_ACTION_METRIC = 'vercel.firewall_action.count';
