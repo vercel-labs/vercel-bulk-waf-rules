@@ -38,3 +38,6 @@ tests/aws-waf/.test-state.json
 node_modules/
 dist/
 coverage/
+
+# Local migration artifacts may contain customer configuration or IP data
+.vercel-migrate/

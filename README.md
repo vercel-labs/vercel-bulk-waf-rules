@@ -1,6 +1,76 @@
-# Vercel Bulk WAF Rule Migration Scripts
+# Vercel Migration Control Plane
 
-Bulk migrate WAF (Web Application Firewall) rules from various providers to Vercel.
+This repository is being re-architected into a TypeScript control plane for planning and verifying Firewall, CDN, Domain, and application workload migrations to Vercel. See [AGENTS.md](AGENTS.md) for the product charter, architecture invariants, roadmap, and current progress.
+
+The existing Bash workflow is a legacy **IP-list migration utility**. It does not yet preserve complete source-provider firewall semantics such as actions, nested conditions, priority, default behavior, rate limits, or scope. Do not treat its provider exporters as full WAF-policy migration support.
+
+All migration direction references mean `{source platform} -> Vercel`. The [MVP roadmap and test plan](docs/mvp-test-plan.md) defines the first supported paths, including Firewall, AWS Lambda assessment, Domain/DNS planning, and the release gates for each path.
+
+## Use the TypeScript preview
+
+Install dependencies and inspect the truthful capability registry:
+
+```bash
+npm ci
+npm run --silent cli -- support
+```
+
+The current TypeScript CLI is non-mutating. It creates, validates, and reports on migration bundles without authenticating to providers or changing Vercel resources.
+
+The early TypeScript preview can create a non-mutating source snapshot and deterministic plan bundle:
+
+```bash
+npm run --silent cli -- plan-ip \
+  --input vendor-ips.csv \
+  --intent blocklist \
+  --project-id prj_xxxxxxxxxxxx \
+  > migration-bundle.json
+```
+
+Alternatively, write it with private permissions below a schema-versioned artifact directory:
+
+```bash
+npm run --silent cli -- plan-ip \
+  --input vendor-ips.csv \
+  --intent blocklist \
+  --project-id prj_xxxxxxxxxxxx \
+  --artifact-dir .vercel-migrate/artifacts
+```
+
+Validate or render a review report before any future staging step:
+
+```bash
+npm run --silent cli -- validate --input migration-bundle.json
+npm run --silent cli -- report --input migration-bundle.json
+npm run --silent cli -- support
+```
+
+Validation checks the artifact schema, snapshot provenance, dependency safety, and deterministic content ID. None of these TypeScript commands mutate Vercel.
+
+Use `allowlist`, `blocklist`, or `bypass` for `--intent`. Add `--hostname api.example.com` to scope the planned rules. The TypeScript planner accepts IPv4 and IPv6; the legacy Bash workflow documented below remains IPv4-only.
+
+`support` is the authoritative machine-readable compatibility view. It reports API variants, last-verification dates, semantic gaps, live-E2E status, and the actual implementation level instead of inferring support from the presence of a legacy export script.
+
+### Cloudflare semantic preview
+
+`plan-cloudflare` accepts the JSON response from Cloudflare's zone-level `http_request_firewall_custom` Rulesets entrypoint:
+
+```bash
+npm run --silent cli -- plan-cloudflare \
+  --input cloudflare-custom-ruleset.json \
+  --account-id account_xxxxxxxxxxxx \
+  --zone-id zone_xxxxxxxxxxxx \
+  --project-id prj_xxxxxxxxxxxx \
+  > migration-bundle.json
+```
+
+The current fail-closed subset supports Boolean expressions over client IP/ASN/country and common request fields, plus block/log actions and explicitly approximate challenge mappings. Unsupported fields, transformations, unresolved lists, skip semantics, managed execution, and other actions become visible manual operations. They are never silently dropped. Authenticated Cloudflare discovery is not implemented yet.
+
+Provider-derived CSVs must include `--source-provider`; these plans are intentionally classified as `manual` fidelity until native semantic adapters are implemented.
+
+## Legacy Bash workflow
+
+Bulk migrate IP allow/bypass lists to Vercel Firewall.
 
 We currently support **two modes**:
 
@@ -132,6 +202,8 @@ Detailed guides are available in the `docs/` folder:
 
 | Guide | Description |
 |-------|-------------|
+| [MVP roadmap and test plan](docs/mvp-test-plan.md) | MVP product slices, implementation milestones, test cases, and release gates |
+| [Control-plane architecture](docs/control-plane-architecture.md) | Shared workflow contracts and product-specific model boundaries |
 | [Vercel Credentials](docs/vercel-credentials.md) | API token setup and project/team ID discovery |
 | [Cloudflare Export](docs/cloudflare-export.md) | Export IPs from Cloudflare WAF rules |
 | [Akamai Export](docs/akamai-export.md) | Export IPs from Akamai Network Lists |

@@ -668,8 +668,10 @@ export_blacklist() {
   fi
   
   echo ""
-  log_info "Next step: Import to Vercel"
-  echo "  DRY_RUN=true RULE_MODE=deny ./vercel-bulk-waf-rules.sh apply $output_file"
+  log_warn "Do not import this blacklist with legacy RULE_MODE=deny."
+  log_warn "That mode denies everyone EXCEPT the listed IPs and reverses blacklist intent."
+  log_info "Safe next step: create a read-only TypeScript blocklist plan"
+  echo "  npm run cli -- plan-ip --input $output_file --intent blocklist --source-provider fastly --project-id <project-id>"
   
   audit_log "EXPORT_BLACKLIST" "corp=$corp site=$site count=$count file=$output_file"
 }
