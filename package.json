@@ -1,0 +1,22 @@
+{
+  "name": "@vercel-cx/bulk-waf-rules",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript planning core for bulk-importing IP allow/deny lists into the Vercel WAF.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

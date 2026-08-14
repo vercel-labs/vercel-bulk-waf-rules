@@ -25,6 +25,7 @@
 #   ./vercel-bulk-waf-rules.sh apply vendor-ips.csv           # Create/update rule (deny mode)
 #   RULE_MODE=bypass ./vercel-bulk-waf-rules.sh apply ips.csv # Bypass mode
 #   ./vercel-bulk-waf-rules.sh show                           # Show current rules
+#   ./vercel-bulk-waf-rules.sh audit                          # Check for the split-allowlist outage bug
 #   ./vercel-bulk-waf-rules.sh disable                        # Disable rule temporarily
 #   ./vercel-bulk-waf-rules.sh remove                         # Remove a single rule
 #   ./vercel-bulk-waf-rules.sh purge                          # Remove ALL auto-managed rules
@@ -49,6 +50,19 @@
 #   - Store tokens in a secrets manager, not in env files committed to git
 #   - Use minimal token scopes: read:project, write:project
 #
+# Changelog:
+#   2.1.0 - P0 FIX: deny/allowlist mode no longer splits a large IP list across
+#           sibling "(Part N/M)" rules. Sibling rules OR together, so a disjoint
+#           split of a "ninc" (NOT IN) allowlist denied EVERY request, including
+#           the allowlisted ones. Large allowlists now build ONE rule with ONE
+#           condition group holding multiple ANDed ip_address/ninc conditions.
+#           Hard ceiling: 65 conditions x 75 IPs = 4875 entries; above that the
+#           script refuses instead of emitting a broken rule.
+#           Adds the read-only 'audit' command to detect already-deployed
+#           instances of the bug (exit 2 = VULNERABLE).
+#           Bypass mode chunking is unchanged (positive matching ORs correctly).
+#   2.0.0 - Two-mode support (deny/bypass), CIDR optimization, chunking.
+#
 # =============================================================================
 
 set -euo pipefail
@@ -57,11 +71,24 @@ set -euo pipefail
 # Constants & Configuration
 # =============================================================================
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
 readonly RATE_LIMIT_DELAY_MS=800
 readonly RATE_LIMIT_BACKOFF_SEC=60
 readonly MAX_RETRIES=3
 readonly MAX_IPS_PER_CONDITION=75  # Vercel limit per condition array
+
+# Server-side schema caps (hard limits, enforced by the firewall API):
+# 75 items per array condition value, 65 conditions per group, 25 groups per rule
+readonly MAX_CONDITIONS_PER_GROUP=65
+# Ceiling for a single allowlist (deny) rule: conditions AND, so all slices fit
+# in one group. 65 conditions x 75 IPs each. More GROUPS would not help - groups
+# OR, which reintroduces the outage one level up.
+readonly MAX_ALLOWLIST_IPS=$((MAX_CONDITIONS_PER_GROUP * MAX_IPS_PER_CONDITION))
+# Custom rules per project: 3 (Hobby) / 40 (Pro) / 1000 (Enterprise)
+readonly MAX_RULES_PRO_PLAN=40
+
+# Managed rule name prefixes (used by find_allowlist_rules and cmd_audit)
+readonly ALLOWLIST_RULE_NAME="IP Allowlist - Auto-managed"
 
 # Vercel CLI command (set in check_dependencies)
 VERCEL_CMD=""
@@ -846,6 +873,41 @@ build_firewall_endpoint() {
   echo "$endpoint"
 }
 
+# Build the conditions array for ONE condition group.
+#
+# IPs are packed into ceil(n / MAX_IPS_PER_CONDITION) ip_address conditions that
+# all live in the SAME group. This MUST stay conditions-in-one-group and must
+# never become sibling rules or extra condition groups: conditions within a
+# group AND together, while rules and condition groups OR together. For an
+# allowlist (op "ninc" + action "deny") the correct decomposition is
+# deny if (ip NOT IN s1) AND (ip NOT IN s2) ... == deny if ip NOT IN (s1 U s2),
+# whereas ORing the negated slices matches every address (each address is absent
+# from at least one disjoint slice) and denies ALL traffic - a total outage.
+build_ip_conditions() {
+  local ips_json="$1"
+  local ip_op="$2"
+  local hostname="${3:-}"
+  
+  local ip_conditions
+  ip_conditions=$(jq -n \
+    --arg ip_op "$ip_op" \
+    --argjson max "$MAX_IPS_PER_CONDITION" \
+    --argjson ips "$ips_json" \
+    '[range(0; ($ips | length); $max) as $i
+      | {"type": "ip_address", "op": $ip_op, "value": $ips[$i:$i + $max]}]')
+  
+  if [ -n "$hostname" ]; then
+    # Scoped to specific hostname
+    jq -n \
+      --arg hostname "$hostname" \
+      --argjson ip_conditions "$ip_conditions" \
+      '[{"type": "host", "op": "eq", "value": $hostname}] + $ip_conditions'
+  else
+    # Project-wide
+    echo "$ip_conditions"
+  fi
+}
+
 # Create or update the allowlist rule
 update_allowlist_rule() {
   local project_id="$1"
@@ -859,23 +921,7 @@ update_allowlist_rule() {
   
   # Build conditions array using mode-specific operator
   local conditions
-  if [ -n "$hostname" ]; then
-    # Scoped to specific hostname
-    conditions=$(jq -n \
-      --arg hostname "$hostname" \
-      --arg ip_op "$RULE_IP_OP" \
-      --argjson ips "$ips_json" \
-      '[
-        {"type": "host", "op": "eq", "value": $hostname},
-        {"type": "ip_address", "op": $ip_op, "value": $ips}
-      ]')
-  else
-    # Project-wide
-    conditions=$(jq -n \
-      --arg ip_op "$RULE_IP_OP" \
-      --argjson ips "$ips_json" \
-      '[{"type": "ip_address", "op": $ip_op, "value": $ips}]')
-  fi
+  conditions=$(build_ip_conditions "$ips_json" "$RULE_IP_OP" "$hostname")
   
   # Build the rule value with mode-specific action
   local rule_value
@@ -944,23 +990,7 @@ update_allowlist_rule_with_name() {
   
   # Build conditions array using mode-specific operator
   local conditions
-  if [ -n "$hostname" ]; then
-    # Scoped to specific hostname
-    conditions=$(jq -n \
-      --arg hostname "$hostname" \
-      --arg ip_op "$RULE_IP_OP" \
-      --argjson ips "$ips_json" \
-      '[
-        {"type": "host", "op": "eq", "value": $hostname},
-        {"type": "ip_address", "op": $ip_op, "value": $ips}
-      ]')
-  else
-    # Project-wide
-    conditions=$(jq -n \
-      --arg ip_op "$RULE_IP_OP" \
-      --argjson ips "$ips_json" \
-      '[{"type": "ip_address", "op": $ip_op, "value": $ips}]')
-  fi
+  conditions=$(build_ip_conditions "$ips_json" "$RULE_IP_OP" "$hostname")
   
   # Build the rule value with custom name and mode-specific action
   local rule_value
@@ -1226,6 +1256,7 @@ cmd_apply() {
   # Check for IP limit and offer optimization
   local needs_chunking=false
   local rules_needed=1
+  local conditions_needed=1
   
   if [ "$ip_count" -gt "$MAX_IPS_PER_CONDITION" ]; then
     log_warn "IP count ($ip_count) exceeds limit ($MAX_IPS_PER_CONDITION per rule)"
@@ -1249,11 +1280,55 @@ cmd_apply() {
       fi
     fi
     
-    # Check if we still need chunking
+    # Check if we still need to split the list across conditions/rules
     if [ "$ip_count" -gt "$MAX_IPS_PER_CONDITION" ]; then
-      needs_chunking=true
-      rules_needed=$(( (ip_count + MAX_IPS_PER_CONDITION - 1) / MAX_IPS_PER_CONDITION ))
-      log_warn "Will create $rules_needed separate rules (max $MAX_IPS_PER_CONDITION IPs each)"
+      if [ "$RULE_IP_OP" = "ninc" ]; then
+        # Allowlist/deny: split across ANDed conditions inside ONE rule.
+        # Sibling rules OR, so splitting a "ninc" allowlist across rules denies
+        # every request (see build_ip_conditions). Never chunk this mode.
+        # RULE_HOSTNAME consumes one of the 65 condition slots in the group, so
+        # the effective ceiling drops by one slice when it is set.
+        local allowlist_ceiling="$MAX_ALLOWLIST_IPS"
+        if [ -n "${RULE_HOSTNAME:-}" ]; then
+          allowlist_ceiling=$(( (MAX_CONDITIONS_PER_GROUP - 1) * MAX_IPS_PER_CONDITION ))
+        fi
+        if [ "$ip_count" -gt "$allowlist_ceiling" ]; then
+          log_error "IP count ($ip_count) exceeds the allowlist ceiling of $allowlist_ceiling entries."
+          log_error ""
+          log_error "A deny/allowlist rule must keep every 'ninc' slice in ONE condition group"
+          log_error "($MAX_CONDITIONS_PER_GROUP conditions x $MAX_IPS_PER_CONDITION IPs = $MAX_ALLOWLIST_IPS entries max), because"
+          log_error "conditions AND together while rules and condition groups OR together."
+          log_error "Splitting further would deny ALL traffic, including allowlisted IPs."
+          if [ -n "${RULE_HOSTNAME:-}" ]; then
+            log_error ""
+            log_error "RULE_HOSTNAME is set, which spends one condition slot on the host match,"
+            log_error "lowering the ceiling from $MAX_ALLOWLIST_IPS to $allowlist_ceiling."
+          fi
+          log_error ""
+          log_error "Going above the ceiling requires a bypass-rules + terminal-deny topology,"
+          log_error "which this script does not implement."
+          log_error ""
+          log_error "Recommended: run '$0 optimize <csv_file> optimized-ips.csv' first to"
+          log_error "CIDR-aggregate the list, then apply the optimized CSV."
+          audit_log "ALLOWLIST_REFUSED_OVER_CEILING" "ip_count=$ip_count ceiling=$allowlist_ceiling hostname=${RULE_HOSTNAME:-none}"
+          exit 1
+        fi
+        conditions_needed=$(( (ip_count + MAX_IPS_PER_CONDITION - 1) / MAX_IPS_PER_CONDITION ))
+        log_warn "Will create 1 rule with $conditions_needed ANDed conditions (max $MAX_IPS_PER_CONDITION IPs each)"
+      else
+        # Bypass: positive matching ("inc") ORs correctly across sibling rules.
+        needs_chunking=true
+        rules_needed=$(( (ip_count + MAX_IPS_PER_CONDITION - 1) / MAX_IPS_PER_CONDITION ))
+        log_warn "Will create $rules_needed separate rules (max $MAX_IPS_PER_CONDITION IPs each)"
+        if [ "$rules_needed" -gt "$MAX_RULES_PRO_PLAN" ]; then
+          log_warn "=============================================="
+          log_warn "$rules_needed rules exceeds the Pro plan cap of $MAX_RULES_PRO_PLAN custom rules per project."
+          log_warn "(Caps: 3 Hobby / $MAX_RULES_PRO_PLAN Pro / 1000 Enterprise.)"
+          log_warn "The apply will likely fail with an opaque HTTP 400 partway through."
+          log_warn "Run '$0 optimize <csv_file> optimized-ips.csv' first to reduce the entry count."
+          log_warn "=============================================="
+        fi
+      fi
     fi
   fi
   
@@ -1264,6 +1339,7 @@ cmd_apply() {
   log_info "Rule name: $RULE_NAME"
   log_info "IPs to allowlist: $ip_count"
   [ "$needs_chunking" = true ] && log_info "Rules to create: $rules_needed"
+  [ "$conditions_needed" -gt 1 ] && log_info "Conditions in rule: $conditions_needed (ANDed, single condition group)"
   log_info "Hostname scope: ${RULE_HOSTNAME:-project-wide}"
   echo ""
   
@@ -1281,9 +1357,14 @@ cmd_apply() {
     echo "Mode: $CURRENT_RULE_MODE"
     if [ "$needs_chunking" = true ]; then
       echo "Would create $rules_needed rules with $ip_count total IPs."
+    elif [ "$conditions_needed" -gt 1 ]; then
+      echo "Would create/update 1 rule with $ip_count IPs across $conditions_needed ANDed conditions."
     else
       echo "Would create/update rule with $ip_count IPs."
     fi
+    echo ""
+    echo "Ordering: new rule(s) are created FIRST; any superseded auto-managed rules"
+    echo "          are removed only AFTER that succeeds."
     echo ""
     if [ "$CURRENT_RULE_MODE" = "bypass" ]; then
       echo "EFFECT: Listed IPs will BYPASS WAF/security checks."
@@ -1351,13 +1432,15 @@ cmd_apply() {
   echo ""
   if [ "$needs_chunking" = true ]; then
     echo "This will CREATE $rules_needed rules."
-    if [ "$existing_rule_count" -gt 0 ]; then
-      echo "Existing rules will be REMOVED first."
-    fi
   elif [ "$action" = "update" ]; then
     echo "This will UPDATE the existing rule."
   else
     echo "This will CREATE a new rule."
+  fi
+  if [ "$action" = "insert" ] && [ "$existing_rule_count" -gt 0 ]; then
+    echo "$existing_rule_count existing rule(s) will then be REPLACED - they are removed"
+    echo "only AFTER the new rule(s) are created, so a failure never leaves the"
+    echo "project unprotected."
   fi
   echo ""
   if [ "$CURRENT_RULE_MODE" = "bypass" ]; then
@@ -1379,38 +1462,11 @@ cmd_apply() {
   # Apply the rule(s)
   log_info "Applying allowlist rule(s)..."
   
+  local mode_upper
+  mode_upper=$(echo "$CURRENT_RULE_MODE" | tr '[:lower:]' '[:upper:]')
+  local created_count=0
+  
   if [ "$needs_chunking" = true ]; then
-    # Remove existing rules first (can be skipped with SKIP_REMOVAL=true)
-    local removal_failures=0
-    if [ "$existing_rule_count" -gt 0 ]; then
-      if [ "${SKIP_REMOVAL:-false}" = "true" ]; then
-        log_warn "SKIP_REMOVAL=true - Skipping removal of $existing_rule_count existing rule(s)"
-        log_warn "You may have duplicate rules. Clean up manually in Vercel dashboard."
-      else
-        log_info "Removing $existing_rule_count existing rule(s)..."
-        for rule_id in $(echo "$all_rules" | jq -r '.[].id'); do
-          if remove_allowlist_rule "$project_id" "$rule_id" 3; then
-            log_info "Removed rule: $rule_id"
-          else
-            log_warn "Failed to remove rule: $rule_id (will continue anyway)"
-            ((removal_failures++))
-          fi
-          # Brief delay between removals
-          sleep 1
-        done
-        
-        if [ "$removal_failures" -gt 0 ]; then
-          log_warn "$removal_failures rule(s) could not be removed. You may need to remove them manually via Vercel dashboard."
-          echo ""
-          read -p "Continue creating new rules anyway? (yes/no): " CONTINUE
-          if [ "$CONTINUE" != "yes" ]; then
-            echo "Aborted."
-            exit 1
-          fi
-        fi
-      fi
-    fi
-    
     # Create chunked rules
     local chunk_start=0
     local chunk_num=1
@@ -1438,46 +1494,114 @@ cmd_apply() {
       rate_limit_sleep
     done
     
-    if [ "$success_count" -eq "$rules_needed" ]; then
-      echo ""
-      echo "=============================================="
-      echo "  SUCCESS"
-      echo "=============================================="
-      echo ""
-      log_info "Created $success_count rules successfully! (mode: $CURRENT_RULE_MODE)"
-      log_info "Total whitelisted IPs: $ip_count"
-      if [ "$CURRENT_RULE_MODE" = "bypass" ]; then
-        log_info "Listed IPs will bypass WAF/security checks."
-      else
-        log_info "All other traffic will be BLOCKED."
-      fi
-      audit_log "$(echo "$CURRENT_RULE_MODE" | tr '[:lower:]' '[:upper:]')_INSERT_CHUNKED" "ip_count=$ip_count rules=$success_count"
-    else
+    # A partial create must not trigger removal: dropping the old rules would
+    # leave the IPs of the missing chunks with no coverage at all
+    if [ "$success_count" -ne "$rules_needed" ]; then
       log_error "Only $success_count of $rules_needed rules were created"
-      audit_log "$(echo "$CURRENT_RULE_MODE" | tr '[:lower:]' '[:upper:]')_INSERT_CHUNKED_PARTIAL" "ip_count=$ip_count rules_created=$success_count rules_needed=$rules_needed"
+      echo ""
+      echo "=============================================="
+      echo "  INCOMPLETE - NO RULES WERE REMOVED"
+      echo "=============================================="
+      echo ""
+      echo "Current project state:"
+      echo "  - $success_count newly created rule(s) named '${RULE_NAME} (Part N/$rules_needed)'"
+      echo "  - $existing_rule_count pre-existing auto-managed rule(s), left UNTOUCHED"
+      echo ""
+      echo "Nothing was removed, so existing coverage is intact."
+      echo ""
+      echo "Next steps:"
+      echo "  1. $0 show                     # inspect what is in place now"
+      echo "  2. Remove the $success_count partial rule(s) via the Vercel dashboard, or"
+      echo "     $0 purge                    # remove ALL auto-managed rules, then re-apply"
+      echo "  3. Re-run apply once the API is healthy"
+      echo ""
+      audit_log "${mode_upper}_INSERT_CHUNKED_PARTIAL" "ip_count=$ip_count rules_created=$success_count rules_needed=$rules_needed removed=0"
       exit 1
     fi
+    
+    created_count="$success_count"
+    log_info "Created $created_count rule(s) successfully."
   else
     # Single rule
-    if update_allowlist_rule "$project_id" "$ips_json" "$action" "$existing_rule_id"; then
-      echo ""
-      echo "=============================================="
-      echo "  SUCCESS"
-      echo "=============================================="
-      echo ""
-      log_info "Rule ${action}ed successfully! (mode: $CURRENT_RULE_MODE)"
-      log_info "Whitelisted IPs: $ip_count"
-      if [ "$CURRENT_RULE_MODE" = "bypass" ]; then
-        log_info "Listed IPs will bypass WAF/security checks."
-      else
-        log_info "All other traffic will be BLOCKED."
-      fi
-      audit_log "$(echo "$CURRENT_RULE_MODE" | tr '[:lower:]' '[:upper:]')_$(echo "$action" | tr '[:lower:]' '[:upper:]')" "ip_count=$ip_count"
-    else
+    if ! update_allowlist_rule "$project_id" "$ips_json" "$action" "$existing_rule_id"; then
       log_error "Failed to $action rule"
-      audit_log "$(echo "$CURRENT_RULE_MODE" | tr '[:lower:]' '[:upper:]')_$(echo "$action" | tr '[:lower:]' '[:upper:]')_FAILED" "ip_count=$ip_count"
+      if [ "$action" = "insert" ] && [ "$existing_rule_count" -gt 0 ]; then
+        echo ""
+        echo "$existing_rule_count existing auto-managed rule(s) were left in place - nothing was removed."
+        echo "The project's current protection is unchanged. Re-run apply once the API is healthy."
+        echo ""
+      fi
+      audit_log "${mode_upper}_$(echo "$action" | tr '[:lower:]' '[:upper:]')_FAILED" "ip_count=$ip_count removed=0"
       exit 1
     fi
+    
+    created_count=1
+    log_info "Rule ${action}ed successfully."
+  fi
+  
+  # Replace stale rules only AFTER the new rule(s) exist. Removing first would be
+  # fail-OPEN in deny mode: a failed insert would leave the project with no
+  # allowlist rule at all. Overlapping instead keeps deny mode fail-CLOSED (the
+  # old rules keep blocking) and is idempotent in bypass mode.
+  # $all_rules was captured from the config fetched BEFORE any insert, so it can
+  # only ever contain pre-existing rule IDs - never the rule just created.
+  local removal_failures=0
+  local removed_count=0
+  if [ "$action" = "insert" ] && [ "$existing_rule_count" -gt 0 ]; then
+    if [ "${SKIP_REMOVAL:-false}" = "true" ]; then
+      log_warn "SKIP_REMOVAL=true - Skipping removal of $existing_rule_count existing rule(s)"
+      log_warn "You may have duplicate rules. Clean up manually in Vercel dashboard."
+    else
+      log_info "Removing $existing_rule_count superseded rule(s)..."
+      for rule_id in $(echo "$all_rules" | jq -r '.[].id'); do
+        if remove_allowlist_rule "$project_id" "$rule_id" 3; then
+          log_info "Removed rule: $rule_id"
+          ((removed_count++))
+        else
+          log_warn "Failed to remove rule: $rule_id (will continue anyway)"
+          ((removal_failures++))
+        fi
+        # Brief delay between removals
+        sleep 1
+      done
+      
+      if [ "$removal_failures" -gt 0 ]; then
+        log_warn "$removal_failures rule(s) could not be removed. You may need to remove them manually via Vercel dashboard."
+        log_warn "The new rule(s) are already active, so these stale rules are now redundant."
+        echo ""
+        read -p "Continue? (yes/no): " CONTINUE
+        if [ "$CONTINUE" != "yes" ]; then
+          echo "Aborted. New rule(s) remain in place; remove the stale rules manually."
+          exit 1
+        fi
+      fi
+    fi
+  fi
+  
+  echo ""
+  echo "=============================================="
+  echo "  SUCCESS"
+  echo "=============================================="
+  echo ""
+  if [ "$needs_chunking" = true ]; then
+    log_info "Created $created_count rules successfully! (mode: $CURRENT_RULE_MODE)"
+    log_info "Total whitelisted IPs: $ip_count"
+  else
+    log_info "Rule ${action}ed successfully! (mode: $CURRENT_RULE_MODE)"
+    log_info "Whitelisted IPs: $ip_count"
+    [ "$conditions_needed" -gt 1 ] && log_info "Packed into $conditions_needed ANDed conditions in a single rule."
+  fi
+  [ "$removed_count" -gt 0 ] && log_info "Removed $removed_count superseded rule(s)."
+  if [ "$CURRENT_RULE_MODE" = "bypass" ]; then
+    log_info "Listed IPs will bypass WAF/security checks."
+  else
+    log_info "All other traffic will be BLOCKED."
+  fi
+  
+  if [ "$needs_chunking" = true ]; then
+    audit_log "${mode_upper}_INSERT_CHUNKED" "ip_count=$ip_count rules=$created_count removed=$removed_count"
+  else
+    audit_log "${mode_upper}_$(echo "$action" | tr '[:lower:]' '[:upper:]')" "ip_count=$ip_count removed=$removed_count"
   fi
 }
 
@@ -1871,6 +1995,128 @@ cmd_backup() {
   audit_log "BACKUP_CREATED" "file=$backup_file"
 }
 
+# Read-only check for the pre-2.1.0 split-allowlist outage bug.
+#
+# Outage signature: a "ninc" (NOT IN) allowlist split across ORing containers.
+# Because sibling rules and sibling condition groups OR together, a disjoint
+# split denies every address (each one is absent from at least one slice).
+# Exit codes: 0 = OK/INFO, 2 = VULNERABLE (greppable for CI).
+cmd_audit() {
+  local project_id="${PROJECT_ID:?PROJECT_ID is required}"
+  
+  log_info "Auditing WAF rules for the split-allowlist outage bug..."
+  
+  local config
+  if ! config=$(get_firewall_config "$project_id"); then
+    exit 1
+  fi
+  
+  local managed_rules
+  managed_rules=$(find_allowlist_rules "$config")
+  
+  # Only deny/allowlist rules can carry the bug; bypass rules OR correctly.
+  local allowlist_rules
+  allowlist_rules=$(echo "$managed_rules" | jq -c --arg prefix "$ALLOWLIST_RULE_NAME" \
+    '[.[] | select(.name | startswith($prefix))]' 2>/dev/null || echo "[]")
+  
+  local allowlist_count
+  allowlist_count=$(echo "$allowlist_rules" | jq 'length' 2>/dev/null || echo "0")
+  
+  echo ""
+  echo "=============================================="
+  echo "  Allowlist Audit for $project_id"
+  echo "=============================================="
+  echo ""
+  
+  if [ "$allowlist_count" -eq 0 ]; then
+    echo "RESULT: INFO"
+    echo ""
+    echo "No auto-managed allowlist rules found ('$ALLOWLIST_RULE_NAME')."
+    echo "Nothing to audit."
+    audit_log "AUDIT_INFO" "allowlist_rules=0"
+    exit 0
+  fi
+  
+  # Active deny rules that negate an IP set - the pieces of a split allowlist
+  local denying_rules
+  denying_rules=$(echo "$allowlist_rules" | jq -c '
+    [.[]
+     | select(.active == true)
+     | select(.action.mitigate.action == "deny")
+     | select([.conditionGroup[]?.conditions[]?
+               | select(.type == "ip_address" and .op == "ninc")] | length > 0)]' 2>/dev/null || echo "[]")
+  
+  local denying_count
+  denying_count=$(echo "$denying_rules" | jq 'length' 2>/dev/null || echo "0")
+  
+  # Group-level variant: one rule, multiple groups, a negated IP set in any group
+  local multi_group_rules
+  multi_group_rules=$(echo "$denying_rules" | jq -c '
+    [.[]
+     | select((.conditionGroup | length) > 1)
+     | select([.conditionGroup[] | select([.conditions[]?
+               | select(.type == "ip_address" and .op == "ninc")] | length > 0)] | length > 0)]' 2>/dev/null || echo "[]")
+  
+  local multi_group_count
+  multi_group_count=$(echo "$multi_group_rules" | jq 'length' 2>/dev/null || echo "0")
+  
+  local vulnerable=false
+  local variant=""
+  local offending="[]"
+  
+  if [ "$denying_count" -ge 2 ]; then
+    vulnerable=true
+    variant="sibling rules"
+    offending="$denying_rules"
+  elif [ "$multi_group_count" -ge 1 ]; then
+    vulnerable=true
+    variant="condition groups"
+    offending="$multi_group_rules"
+  fi
+  
+  if [ "$vulnerable" = false ]; then
+    echo "RESULT: OK"
+    echo ""
+    echo "Found $allowlist_count auto-managed allowlist rule(s); no split-allowlist pattern detected."
+    echo "$allowlist_rules" | jq -r '.[] | "  - \(.name) (\(.id)) active=\(.active)"'
+    audit_log "AUDIT_OK" "allowlist_rules=$allowlist_count denying_rules=$denying_count"
+    exit 0
+  fi
+  
+  local distinct_ips
+  distinct_ips=$(echo "$offending" | jq '
+    [.[] | .conditionGroup[]?.conditions[]?
+     | select(.type == "ip_address" and .op == "ninc") | .value[]?] | unique | length' 2>/dev/null || echo "0")
+  
+  echo "RESULT: VULNERABLE"
+  echo ""
+  echo "A 'ninc' (NOT IN) allowlist is split across ORing $variant."
+  echo "Sibling rules and sibling condition groups OR together, so every address"
+  echo "is absent from at least one slice and matches a deny. ALL traffic is being"
+  echo "blocked, including the allowlisted IPs."
+  echo ""
+  echo "Offending rules:"
+  echo "$offending" | jq -r '.[] | "  - \(.name) (\(.id)) groups=\(.conditionGroup | length) active=\(.active)"'
+  echo ""
+  echo "Distinct IPs/CIDRs across offending rules: $distinct_ips"
+  echo ""
+  echo "REMEDIATION:"
+  echo "  If the site is currently DOWN, stop the bleeding first:"
+  echo "    $0 disable      # deactivate the managed rule(s)"
+  echo "    $0 remove       # or remove a single rule"
+  echo "    $0 purge        # or remove ALL auto-managed rules"
+  echo ""
+  echo "  Then re-apply with this version (>= $SCRIPT_VERSION), which packs the list"
+  echo "  into ONE rule with ANDed conditions:"
+  echo "    DRY_RUN=true RULE_MODE=deny $0 apply <csv_file>"
+  echo "    RULE_MODE=deny $0 apply <csv_file>"
+  echo ""
+  echo "  If the list exceeds $MAX_ALLOWLIST_IPS entries, run '$0 optimize <csv_file>' first."
+  echo ""
+  audit_log "AUDIT_VULNERABLE" "variant=$variant rules=$denying_count distinct_ips=$distinct_ips"
+  exit 2
+}
+
 cmd_optimize() {
   local csv_file="$1"
   local output_file="${2:-}"
@@ -1923,13 +2169,17 @@ cmd_optimize() {
   echo "  Reduction:         $reduction entries ($reduction_pct%)"
   echo ""
   
-  # Check if we're still over the limit
+  # Check if we're still over the limit (packing differs per mode)
   if [ "$optimized_count" -gt "$MAX_IPS_PER_CONDITION" ]; then
-    local rules_needed=$(( (optimized_count + MAX_IPS_PER_CONDITION - 1) / MAX_IPS_PER_CONDITION ))
-    log_warn "Still exceeds $MAX_IPS_PER_CONDITION per rule limit."
-    log_warn "Will need $rules_needed separate rules when applying."
+    local chunks_needed=$(( (optimized_count + MAX_IPS_PER_CONDITION - 1) / MAX_IPS_PER_CONDITION ))
+    log_warn "Still exceeds $MAX_IPS_PER_CONDITION entries per condition."
+    log_warn "deny/allowlist mode:  1 rule with $chunks_needed ANDed conditions (ceiling: $MAX_ALLOWLIST_IPS entries)."
+    if [ "$optimized_count" -gt "$MAX_ALLOWLIST_IPS" ]; then
+      log_warn "  -> $optimized_count entries EXCEEDS the $MAX_ALLOWLIST_IPS allowlist ceiling. 'apply' will refuse in deny mode."
+    fi
+    log_warn "bypass mode:          $chunks_needed separate rules (Pro plan caps custom rules at $MAX_RULES_PRO_PLAN)."
   else
-    log_info "Optimized list fits within $MAX_IPS_PER_CONDITION limit!"
+    log_info "Optimized list fits in a single $MAX_IPS_PER_CONDITION-entry condition!"
   fi
   
   echo ""
@@ -2077,6 +2327,7 @@ USAGE:
   $0 apply <csv_file>             Create/update rule with IPs from CSV
   $0 optimize <csv_file> [output] Optimize IPs into CIDR ranges
   $0 show                         Show current firewall rules
+  $0 audit                        Check for the split-allowlist outage bug (read-only)
   $0 disable                      Disable rule temporarily
   $0 remove                       Remove a single rule
   $0 purge                        Remove ALL auto-managed rules
@@ -2140,6 +2391,9 @@ EXAMPLES:
 
   # Show current configuration
   ./vercel-bulk-waf-rules.sh show
+
+  # Audit for the split-allowlist outage bug (exit 0 = OK, 2 = VULNERABLE)
+  ./vercel-bulk-waf-rules.sh audit
 
   # Disable rule temporarily
   ./vercel-bulk-waf-rules.sh disable
@@ -2265,6 +2519,9 @@ main() {
     show)
       cmd_show
       ;;
+    audit)
+      cmd_audit
+      ;;
     disable)
       cmd_disable
       ;;
@@ -2285,4 +2542,7 @@ main() {
   esac
 }
 
-main "$@"
+# Skip execution when sourced, so tests can exercise helpers directly
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

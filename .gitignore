@@ -33,3 +33,8 @@ Thumbs.db
 # E2E test state files (auto-generated, contain AWS resource IDs)
 .test-state.json
 tests/aws-waf/.test-state.json
+
+# TypeScript / Node build artifacts
+node_modules/
+dist/
+coverage/
